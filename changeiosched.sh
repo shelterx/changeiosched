@@ -52,13 +52,16 @@ select_ioscheduler() {
     local selected_disk=$1
     ioschedulers=$(cat /sys/block/$(basename "$selected_disk")/queue/scheduler | tr ' ' '\n')
 
-    selected_ioscheduler=$(echo "$ioschedulers" | kdialog --menu "Select I/O scheduler for $selected_disk.\nIO scheduler within [ ] is active" --title "I/O Scheduler Selection" $(awk '{print $1, $1}' <<< "$ioschedulers"))
+    selected_ioscheduler=$(echo "$ioschedulers" | kdialog --menu "Select I/O scheduler for $selected_disk\nIO scheduler within [ ] is active." --title "I/O Scheduler Selection" $(awk '{print $1, $1}' <<< "$ioschedulers"))
 
     if [ -z "$selected_ioscheduler" ]; then
         # no IO Sched was selected, return to main menu
         main
+    elif [[ "$selected_ioscheduler" =~ \[.*\] ]]; then
+        kdialog --title "Already set" --sorry  "$selected_ioscheduler is already active on $selected_disk"
+        main # return to main
     else
-    apply_ioscheduler "$selected_disk" "$selected_ioscheduler"
+        apply_ioscheduler "$selected_disk" "$selected_ioscheduler"
     fi
 
     echo "$selected_ioscheduler"
