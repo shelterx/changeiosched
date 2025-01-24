@@ -1,9 +1,13 @@
 #!/bin/bash
 
+if [ ! "$(uname)" == "Linux" ]; then
+    echo "Unsupported OS! This script is only supported on Linux."
+fi
+
 # Prevent window debug output for kdialog
 export QT_LOGGING_RULES="*.debug=false"
 
-# Genereal function to check for existing files
+# General function to check for existing files
 check_files_exist() {
     local filenames=("$@")  # Accept filenames as arguments
 
@@ -16,12 +20,12 @@ check_files_exist() {
     return 1 # Exit the script if the file isn't found
 }
 
-# Check if we have kdialog installed.
-filenames=('/usr/bin/kdialog' '/usr/local/bin/kdialog')
+# Check if we have kdialog or zenity installed.
+filenames=('/usr/bin/kdialog' '/usr/local/bin/kdialog' '/usr/bin/zenity' '/usr/local/bin/zenity')
 check_files_exist "${filenames[@]}"
 
 if [ $? -ne 0 ]; then  # Check the exit status
-    echo "This script depends on kdialog, please install it."
+    echo "This script depends on kdialog or zenity, please install one of them."
     exit
 fi
 
@@ -34,10 +38,45 @@ if [ $? -ne 0 ]; then  # Check the exit status
     exit
 fi
 
+# Shared text strings
+DISK_SELECTION_TITLE="Disk Selection"
+IOSCHEDULER_SELECTION_TITLE="I/O Scheduler Selection"
+DISK_SELECTION_MESSAGE="Select a disk"
+IOSCHEDULER_SELECTION_MESSAGE="Select I/O scheduler for"
+ACTIVE_SCHED_MESSAGE="IO scheduler within [ ] is active."
+SUCCESS_MESSAGE="I/O scheduler for %s is set to %s"
+ERROR_MESSAGE="Failed to apply I/O scheduler. The password may have been incorrect or the operation was canceled."
+GENERAL_ERROR_MESSAGE="No suitable dialog tool found."
+
+# Function to display a dialog using the available tool (kdialog or zenity)
+dialog() {
+    if command -v kdialog &> /dev/null; then
+        # Use kdialog if available
+        kdialog "$@"
+    elif command -v zenity &> /dev/null; then
+        # Use zenity if kdialog is not available
+        zenity "$@"
+    else
+        echo "$GENERAL_ERROR_MESSAGE"
+        exit 1
+    fi
+}
+
 # Function to select a disk
 select_disk() {
-    disks=$(lsblk -d -n -p -o NAME | grep -v '/dev/loop')
-    selected_disk=$(echo "$disks" | kdialog --menu "Select a disk" --title "Disk Selection" $(awk '{print $1, $1}' <<< "$disks"))
+    local disks=$(lsblk -d -n -p -o NAME | grep -v '/dev/loop'| sort)
+
+    # Disk list for kdialog
+    local disk_menu_items=""
+    for disk in $disks; do
+        disk_menu_items="$disk_menu_items $disk $disk"
+    done
+
+    if command -v kdialog &> /dev/null; then
+        local selected_disk=$(kdialog --menu "$DISK_SELECTION_MESSAGE" --title "$DISK_SELECTION_TITLE" $disk_menu_items)
+    elif command -v zenity &> /dev/null; then
+        local selected_disk=$(zenity --list --width=450 --height=490 --title "$DISK_SELECTION_TITLE" --column "$DISK_SELECTION_MESSAGE" $disks)
+    fi
 
     if [ -z "$selected_disk" ]; then
         # Exit if no disk was selected
@@ -50,15 +89,30 @@ select_disk() {
 # Function to select I/O scheduler
 select_ioscheduler() {
     local selected_disk=$1
-    ioschedulers=$(cat /sys/block/$(basename "$selected_disk")/queue/scheduler | tr ' ' '\n')
+    local ioschedulers=$(cat /sys/block/$(basename "$selected_disk")/queue/scheduler | tr ' ' '\n')
+    local column_text=$(printf "$IOSCHEDULER_SELECTION_MESSAGE $selected_disk\n$ACTIVE_SCHED_MESSAGE")
 
-    selected_ioscheduler=$(echo "$ioschedulers" | kdialog --menu "Select I/O scheduler for $selected_disk\nIO scheduler within [ ] is active." --title "I/O Scheduler Selection" $(awk '{print $1, $1}' <<< "$ioschedulers"))
+    # IO sched list for kdialog
+    local io_menu_items=""
+    for iosched in $ioschedulers; do
+        io_menu_items="$io_menu_items $iosched $iosched"
+    done
+
+    if command -v kdialog &> /dev/null; then
+        local selected_ioscheduler=$(kdialog --menu "$IOSCHEDULER_SELECTION_MESSAGE $selected_disk\n$ACTIVE_SCHED_MESSAGE" --title "$IOSCHEDULER_SELECTION_TITLE" $io_menu_items)
+    elif command -v zenity &> /dev/null; then
+        local selected_ioscheduler=$(zenity --list --width=450 --height=490 --title "$IOSCHEDULER_SELECTION_TITLE" --column "$column_text" $ioschedulers)
+    fi
 
     if [ -z "$selected_ioscheduler" ]; then
-        # no IO Sched was selected, return to main menu
+        # No IO scheduler was selected, return to main menu
         main
     elif [[ "$selected_ioscheduler" =~ \[.*\] ]]; then
-        kdialog --title "Already set" --sorry  "$selected_ioscheduler is already active on $selected_disk"
+        if command -v kdialog &> /dev/null; then
+            dialog --title "Already set" --sorry  "$selected_ioscheduler is already active on $selected_disk"
+        elif command -v zenity &> /dev/null; then
+            dialog --info --width 400 --title "Already set" --text "$selected_ioscheduler is already active on $selected_disk"
+        fi
         main # return to main
     else
         apply_ioscheduler "$selected_disk" "$selected_ioscheduler"
@@ -71,16 +125,26 @@ select_ioscheduler() {
 apply_ioscheduler() {
     local selected_disk=$1
     local selected_ioscheduler=$2
+    local set_success="$(printf "$SUCCESS_MESSAGE" "$selected_disk" "$selected_ioscheduler")"
 
     sync
 
     echo "$selected_ioscheduler" | pkexec tee /sys/block/$(basename "$selected_disk")/queue/scheduler > /dev/null
+
     # Check if pkexec failed (exit status != 0)
     if [ $? -ne 0 ]; then
-        kdialog --error "Failed to apply I/O scheduler. The password may have been incorrect or the operation was canceled." --title "Error"
+        if command -v kdialog &> /dev/null; then
+            dialog --error "$ERROR_MESSAGE"
+        elif command -v zenity &> /dev/null; then
+            dialog --error --title "Error" --text "$ERROR_MESSAGE"
+        fi
         exit 1  # Exit the script if pkexec failed
     else
-        kdialog --msgbox "I/O scheduler for $selected_disk is set to $selected_ioscheduler"
+        if command -v kdialog &> /dev/null; then
+            dialog --msgbox "$set_success"
+        elif command -v zenity &> /dev/null; then
+            dialog --info --width 400 --title "Success" --text "$set_success"
+        fi
     fi
 }
 
