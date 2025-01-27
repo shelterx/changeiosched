@@ -83,14 +83,6 @@ else
     fi
 fi
 
-
-# Function to select I/O scheduler
-select_ioscheduler() {
-    local selected_disk=$1
-
-#    echo "$selected_ioscheduler"
-}Documents
-
 # Function to apply the selected I/O scheduler
 apply_ioscheduler() {
     local selected_disk=$1
@@ -174,7 +166,6 @@ main() {
         # Exit if no disk was selected
         exit 1
     fi
-
 
     #################################################
     ### Disk is selected, now select IO scheduler ###
