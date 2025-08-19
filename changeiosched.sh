@@ -4,8 +4,9 @@ if [ ! "$(uname)" == "Linux" ]; then
     echo "Unsupported OS! This script is only supported on Linux."
 fi
 
-# Prevent window debug output for kdialog
-export QT_LOGGING_RULES="*.debug=false"
+# Prevent window debug/warning output for kdialog and notifcations.
+export QT_LOGGING_RULES="*.debug=false;kf.notifications.warning=false"
+
 
 # General function to check for existing files
 check_files_exist() {
